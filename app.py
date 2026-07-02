@@ -289,7 +289,7 @@ while True:
             m3.metric("LÍMITE UMBRAL", f"{umbral:.1f}")
             m4.metric("ALERTAS REGISTRADAS", len(st.session_state.logs))
             m5.metric("LUGAR MONITOREADO", f"📡 {region_actual_label[:14]}...")
-            m6.metric("HORA AJUSTADA", ahora_local.strftime("%H:%M:%S"))
+            m6.metric("HORA", ahora_local.strftime("%H:%M:%S"))
 
         # Dibujar Gráfica Dinámica Fluida
         fig = go.Figure()
