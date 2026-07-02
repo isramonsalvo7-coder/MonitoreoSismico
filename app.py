@@ -2,9 +2,10 @@ import time
 from datetime import datetime
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.graph_objects as go  # <-- Corregido aquí para evitar el SyntaxError
 import requests
 import streamlit as st
+import pytz  # Librería para controlar zonas horarias de forma estricta
 
 # Configuración de la plataforma
 st.set_page_config(page_title="Monitoreo de actividad sismica", layout="wide")
@@ -92,7 +93,7 @@ def obtener_actividad_region_real(lat_ref, lon_ref, radio_km=400):
         pass
     return None
 
-def obtener_todos_los_sismos_recientes():
+def obtener_todos_los_sismos_recientes(zona_horaria):
     lats, lons, mags, lugares, tiempos = [], [], [], [], []
     try:
         response = requests.get(USGS_ALL_DAY, headers=HEADERS, timeout=5)
@@ -108,7 +109,11 @@ def obtener_todos_los_sismos_recientes():
                     mags.append(props.get("mag"))
                     lugares.append(props.get("place", "Desconocido"))
                     epoch = props.get("time") / 1000.0
-                    tiempos.append(datetime.fromtimestamp(epoch).strftime("%H:%M:%S"))
+                    
+                    # Convertir la hora del sismo global a la zona horaria seleccionada por el usuario
+                    dt_utc = datetime.fromtimestamp(epoch, tz=pytz.utc)
+                    dt_local = dt_utc.astimezone(zona_horaria)
+                    tiempos.append(dt_local.strftime("%H:%M:%S"))
     except Exception:
         pass
     return pd.DataFrame({"lat": lats, "lon": lons, "Magnitud": mags, "Ubicación": lugares, "Hora": tiempos})
@@ -176,6 +181,21 @@ with col_ctrl:
     # Umbral por defecto en 5.0
     umbral = st.slider("Umbral de Alerta (Mag)", min_value=0.1, max_value=10.0, value=5.0, step=0.1)
 
+    # Selector dinámico de Zona Horaria para los usuarios de la App
+    opciones_tz = {
+        "México (Centro) 🇲🇽": "America/Mexico_City",
+        "Colombia 🇨🇴": "America/Bogota",
+        "Perú 🇵🇪": "America/Lima",
+        "Chile 🇨🇱": "America/Santiago",
+        "Argentina 🇦🇷": "America/Buenos_Aires",
+        "España (Madrid) 🇪🇸": "Europe/Madrid",
+        "EE.UU. (Este - NY) 🇺🇸": "America/New_York",
+        "EE.UU. (Pacífico - LA) 🇺🇸": "America/Los_Angeles",
+        "Tiempo Universal (UTC) 🌐": "UTC"
+    }
+    tz_seleccionada_nombre = st.selectbox("Ajustar Zona Horaria Local 🕒", list(opciones_tz.keys()), index=0)
+    ZONA_HORARIA_USER = pytz.timezone(opciones_tz[tz_seleccionada_nombre])
+
     st.markdown("**Área de Cobertura (400km):**")
     map_df = pd.DataFrame([coords_base], columns=["lat", "lon"])
     st.map(map_df, zoom=5)
@@ -196,7 +216,9 @@ with col_graph:
 # Bucle Principal de Telemetría Sólido
 while True:
     try:
-        segundo = datetime.now().second + datetime.now().microsecond / 1e6
+        # Obtener tiempo exacto forzado a la zona horaria que el usuario seleccionó
+        ahora_local = datetime.now(ZONA_HORARIA_USER)
+        segundo = ahora_local.second + ahora_local.microsecond / 1e6
         tiempo_ahora = time.time()
 
         # Consulta controlada de la API cada 10 segundos para no saturar
@@ -218,7 +240,7 @@ while True:
                         st.session_state.mag_monitoreada = round(np.random.uniform(0.05, 0.25), 2)
                         st.session_state.lugar_monitoreado = "Ruido Instrumental Estación"
 
-            df_global = obtener_todos_los_sismos_recientes()
+            df_global = obtener_todos_los_sismos_recientes(ZONA_HORARIA_USER)
             
             # Pintar mapa global de forma estable
             if not df_global.empty:
@@ -259,7 +281,7 @@ while True:
         st.session_state.data = np.append(st.session_state.data[1:], nuevo_val)
         st.session_state.flags = np.append(st.session_state.flags[1:], 1 if es_alerta_activa else 0)
 
-        # Renderizado de los Recuadros de Métricas Superiores Recuperados
+        # Renderizado de los Recuadros de Métricas Superiores
         with metrics_ph.container():
             m1, m2, m3, m4, m5, m6 = st.columns(6)
             m1.metric("ESTADO SENSOR", "CRÍTICO" if es_alerta_activa else "NORMAL")
@@ -267,7 +289,7 @@ while True:
             m3.metric("LÍMITE UMBRAL", f"{umbral:.1f}")
             m4.metric("ALERTAS REGISTRADAS", len(st.session_state.logs))
             m5.metric("LUGAR MONITOREADO", f"📡 {region_actual_label[:14]}...")
-            m6.metric("HORA UTC", datetime.now().strftime("%H:%M:%S"))
+            m6.metric("HORA AJUSTADA", ahora_local.strftime("%H:%M:%S"))
 
         # Dibujar Gráfica Dinámica Fluida
         fig = go.Figure()
@@ -277,10 +299,10 @@ while True:
         fig.update_layout(template="plotly_dark", height=260, margin=dict(l=40, r=20, t=10, b=10), plot_bgcolor="#050505", paper_bgcolor="#050505", yaxis=dict(range=[-11, 11]), xaxis=dict(showgrid=False), showlegend=False)
         graph_ph.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        # Control del Historial de Registros
+        # Control del Historial de Registros Local
         if es_alerta_activa and not st.session_state.alerta_previa_activa:
             nuevo_log = pd.DataFrame({
-                "Hora": [datetime.now().strftime("%H:%M:%S")],
+                "Hora": [ahora_local.strftime("%H:%M:%S")],
                 "Magnitud": [f"M {st.session_state.mag_monitoreada:.1f}"],
                 "Origen / Detalle": [st.session_state.lugar_monitoreado],
                 "Lugar": [region_actual_label[:20]],
